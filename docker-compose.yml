@@ -1,0 +1,116 @@
+version: '3.2'
+
+# TODO: healthchecks (& depends_on: condition: service_healty)
+services:
+  #
+  # Zookeeper: for kafka coordination
+  # TODO: zookeeper HA
+  #
+  zookeeper:
+    image: zookeeper:3.4
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # Kafka: message queues
+  #
+  kafka:
+    image: wurstmeister/kafka:0.10.2.1
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ADVERTISED_PORT: 9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: tweets:1:1
+      #KAFKA_CREATE_TOPICS: tweets:3:2
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # elasticsearch: tweets database
+  # watch out vm.max_map_count (see https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html)
+  #
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:5.4.1
+    environment:
+      xpack.security.enabled: "false"
+      discovery.zen.ping.unicast.hosts: elasticsearch
+    deploy:
+      endpoint_mode: dnsrr
+      restart_policy:
+        condition: any
+
+  #
+  # kibana: dashboard
+  #
+  kibana:
+    image: docker.elastic.co/kibana/kibana:5.4.1
+    depends_on:
+      - elasticsearch
+    environment:
+      xpack.security.enabled: "false"
+    ports:
+      - 80:5601
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # twitter2kafka: gets tweets and writes them into kafka
+  #
+  twitter2kafka:
+    image: sergiokhayyat/twitter2kafka
+    depends_on:
+      - kafka
+    environment:
+      TWITTER_CONSUMER_KEY: "$TWITTER_CONSUMER_KEY"
+      TWITTER_CONSUMER_SECRET: "$TWITTER_CONSUMER_SECRET"
+      TWITTER_ACCESS_TOKEN: "$TWITTER_ACCESS_TOKEN"
+      TWITTER_ACCESS_TOKEN_SECRET: "$TWITTER_ACCESS_TOKEN_SECRET"
+      # Search terms (remember $$ to scape the $)
+      SEARCH_TERMS: "$$SPX,#SPX,$$SPY,S&P 500,SP500,US500,Dow Jones,DowJones,DJIA,Dow30,NYSE,NASDAQ,$$FED,#FED,$$TSX,#TSX,VIX,$$XAX,Eurostoxx,Eurostoxx50,Stoxx,Stoxx50,Euronext100,$$CAC,CAC40,Ibex,Ibex35,$$IBX,FTSE,FTSE100,$$DAX,#DAX,DAX30,NIKKEI,Nikkei225,$$NKI,Bovespa,$$BVSP,#BVSP"
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # sentiment-api: sentiment analysis API. In this implementation is a mere proxy
+  # (we will use textbox from machinebox.io)
+  #
+  sentiment-api:
+    image: sergiokhayyat/sentiment-api
+    depends_on:
+      - textbox
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # textbox: sentiment analysis backend service
+  # https://machinebox.io/docs/textbox
+  # https://blog.machinebox.io/introducing-textbox-natural-language-processing-inside-a-docker-container-bdb57a2a3e64
+  #
+  textbox:
+    image: machinebox/textbox
+    environment:
+      MB_KEY: "$MB_KEY"
+    deploy:
+      restart_policy:
+        condition: any
+
+  #
+  # kafka-sentiment-es: reads tweets from the input kafka queue,
+  #                     analyzes them calling a sentiment analysis API
+  #                     and writes them into elasticsearch
+  #
+  agent:
+    image: sergiokhayyat/kafka-sentiment-es
+    depends_on:
+      - kafka
+      - sentiment-api
+      - elasticsearch
+    deploy:
+      restart_policy:
+        condition: any
